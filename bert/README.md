@@ -1,0 +1,4 @@
+- https://medium.com/data-and-beyond/complete-guide-to-building-bert-model-from-sratch-3e6562228891
+- `tokenizer.vocab['[PAD]']`: 0
+- `tokenizer.vocab['[CLS]']`: 1  # sos
+- `tokenizer.vocab['[SEP]']`: 2  # eos
