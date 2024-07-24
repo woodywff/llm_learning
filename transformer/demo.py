@@ -1,16 +1,18 @@
 import math
-
 import torch
 import torch.nn as nn
 from torch.nn import Linear, Dropout, CrossEntropyLoss, LayerNorm, ReLU
 from torch.nn.functional import pad
 from torch.optim import Adam
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
 
 SOS = 0  # start of sentence
 EOS = 1  # end of sentence
 PAD = 2  # padding token
 N_CLASS = 10
+MAX_POSITION = 20
+BATCH_SIZE = 2
 
 
 class Transformer(nn.Module):
@@ -19,8 +21,8 @@ class Transformer(nn.Module):
                  p_dropout=0.1):
         super().__init__()
 
-        self.encoder_embedding = nn.Embedding(n_class, n_feature)
-        self.decoder_embedding = nn.Embedding(n_class, n_feature)
+        self.encoder_embedding = nn.Embedding(n_class, n_feature, padding_idx=2)
+        self.decoder_embedding = nn.Embedding(n_class, n_feature, padding_idx=2)
 
         self.positional_encoder = PositionalEncoder(n_feature=n_feature)
 
@@ -147,7 +149,7 @@ class Decoder(nn.Module):
 
 
 class PositionalEncoder(nn.Module):
-    def __init__(self, n_feature=512, len_seq=20):
+    def __init__(self, n_feature=512, len_seq=MAX_POSITION):
         super().__init__()
         self.pe = torch.zeros((len_seq, n_feature))
         positions = torch.arange(0, len_seq).unsqueeze(1).float()  # (len_seq, 1)
@@ -160,7 +162,7 @@ class PositionalEncoder(nn.Module):
         """
         x: (batch size, len_seq, n_features)
         """
-        return x + self.pe[:, :len(x)]
+        return x + self.pe[:, :x.shape[1]]
 
 
 class Attention(nn.Module):
@@ -188,9 +190,10 @@ class Attention(nn.Module):
         """
         # (batch size, seq_len, n_features) --> (batch size, n_head, seq_len, dim_head)
         batch_size, seq_len, _ = q.shape
-        q = self.fc_q(q).view(batch_size, seq_len, self.n_head, self.dim_head).transpose(1, 2)
-        k = self.fc_k(k).view(batch_size, seq_len, self.n_head, self.dim_head).transpose(1, 2)
-        v = self.fc_v(v).view(batch_size, seq_len, self.n_head, self.dim_head).transpose(1, 2)
+        q = self.fc_q(q).view(batch_size, seq_len, self.n_head, self.dim_head).transpose(1, 2).contiguous()
+        seq_len_kv = k.shape[1]
+        k = self.fc_k(k).view(batch_size, seq_len_kv, self.n_head, self.dim_head).transpose(1, 2).contiguous()
+        v = self.fc_v(v).view(batch_size, seq_len_kv, self.n_head, self.dim_head).transpose(1, 2).contiguous()
 
         # (batch size, n_head, seq_len, seq_len)
         attention_score = torch.matmul(q, k.transpose(2, 3)) / math.sqrt(self.dim_head)
@@ -198,7 +201,7 @@ class Attention(nn.Module):
         attention_score = attention_score.masked_fill(mask == 0, -1e9)
         # (batch size, n_head, seq_len, dim_head) --> (batch size, seq_len, n_features)
         x = torch.softmax(attention_score, dim=-1)
-        x = torch.matmul(x, v).transpose(1, 2).view(batch_size, seq_len, -1)
+        x = torch.matmul(x, v).transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
         # Final
         return self.fc_o(x)
 
@@ -224,9 +227,8 @@ def run():
     len_src = 15
     len_tgt = 18
     n_epoch = 100
-    n_features = 512
 
-    for _ in range(2):
+    for _ in range(BATCH_SIZE):
         # Simulate tokens of source language
         src_tokens = torch.randint(3, N_CLASS, (8,))
         # Append start and end token
@@ -247,38 +249,46 @@ def run():
 
     model = Transformer()
     loss_fn = CrossEntropyLoss(ignore_index=2)
-    optimizer = Adam(model.parameters())
-
+    # Very important
+    optimizer = Adam(model.parameters(), lr=0.0001)
+    scheduler = ReduceLROnPlateau(optimizer, verbose=True, factor=0.5,
+                                           patience=5)
     # train loop
     pbar = tqdm(range(n_epoch), desc='Training')
     for i_epoch in pbar:
+        model.train()
         optimizer.zero_grad()
         pred = model(src, tgt[:, :-1])
-        loss = loss_fn(pred.view(-1, n_features), tgt[:, 1:].view(-1))
+        loss = loss_fn(pred.view(-1, N_CLASS), tgt[:, 1:].contiguous().view(-1))
         loss.backward()
         optimizer.step()
-        pbar.set_postfix(epoch=i_epoch, loss=loss)
+        model.eval()
+        pred_val = model(src, tgt[:, :-1])
+        loss_val = loss_fn(pred_val.view(-1, N_CLASS), tgt[:, 1:].contiguous().view(-1))
+        scheduler.step(loss_val)
+        pbar.set_postfix(epoch=i_epoch, loss=loss, loss_val=loss_val)
 
     # return
 
     # test loop
     y0 = torch.tensor([0])
-    src_mask = model.get_src_mask(src)
-    encoder_output = model.encode(src, src_mask)
-    pbar = tqdm(range(len(y0) < len_tgt * 2), desc='Test')
+    src_test = src[0].unsqueeze(0)
+    src_mask = model.get_src_mask(src_test)
+    encoder_output = model.encode(src_test, src_mask)
+    pbar = tqdm(range(MAX_POSITION), desc='Test')
     for i in pbar:
         y = y0.unsqueeze(0)
         tgt_mask = model.get_tgt_mask(y)
         y = model.decode(y, tgt_mask, encoder_output, src_mask)
         y = model.final_fc(y[:, -1])  # (1, n_class)
         pred = torch.softmax(y, dim=-1)  # (3, )
-        _, next_y0 = torch.max(pred, dim=1)
+        next_y0 = torch.argmax(pred, dim=-1)
 
         y0 = torch.cat([y0, next_y0], dim=0)
         pbar.set_postfix(step=i, output=y0)
         if next_y0 == EOS:
             break
-
+    print(tgt[0])
     print(y0)
 
 

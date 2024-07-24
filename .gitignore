@@ -4,3 +4,4 @@ bert/data
 bert/datasets
 bert/bert-it-1
 bert/cornell movie-dialogs corpus
+*/__pycache__/
