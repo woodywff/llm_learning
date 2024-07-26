@@ -3,7 +3,7 @@
 - `tokenizer.vocab['[PAD]']`: 0
 - `tokenizer.vocab['[CLS]']`: 1  # sos
 - `tokenizer.vocab['[SEP]']`: 2  # eos
-- `tokenizer.vocab['[MASK]']`: 3  # eos
+- `tokenizer.vocab['[MASK]']`: 3  
 # 
 - the iter of dataset would take a couple of lines from the movie script
 - if the two lines are next to each other, the `is_next_label` is 1 otherwise the 2nd sentence may be randomly changed and the `is_next_label` is 0

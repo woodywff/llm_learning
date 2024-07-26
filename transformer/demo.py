@@ -226,7 +226,7 @@ def run():
     tgt_list = []
     len_src = 15
     len_tgt = 18
-    n_epoch = 100
+    n_epoch = 2
 
     for _ in range(BATCH_SIZE):
         # Simulate tokens of source language
