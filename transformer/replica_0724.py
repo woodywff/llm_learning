@@ -7,8 +7,7 @@ from torch.nn.functional import pad
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from demo import PositionalEncoder, Encoder, Decoder
-
+from demo import Attention, FeedForward
 
 SOS = 1
 EOS = 2
@@ -22,9 +21,32 @@ N_CLASS_Y = 11
 
 # N_CLASS_Y = 10
 
+class PositionalEncoder(nn.Module):
+    def __init__(self, n_feature=512, len_seq=20):
+        super().__init__()
+        self.pe = torch.zeros(len_seq, n_feature)
+        positions = torch.arange(0, len_seq).unsqueeze(1).float()   # （seq len, 1）
+        div = 1 / 10000 ** (torch.arange(0, n_feature, 2).float() / n_feature)  # (n_feature/2,)
+        self.pe[:, 0::2] = torch.sin(positions * div)   # 2i
+        self.pe[:, 1::2] = torch.cos(positions * div)   # 2i+1
+        self.pe = self.pe.unsqueeze(0)  # (1, seq len, n_feature)
+    def forward(self, x):
+        return x + self.pe[:, :x.shape[1]]
 
-#
-#
+class Encoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self):
+        pass
+
+class Decoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self):
+        pass
+
 class Transformer(nn.Module):
     def __init__(self, n_feature=512, n_encoder=6, n_decoder=6,
                  n_class_x=N_CLASS_X, n_class_y=N_CLASS_Y, n_hidden_feature=2048, n_head=8,
@@ -33,7 +55,8 @@ class Transformer(nn.Module):
 
         self.embedding_x = Embedding(n_class_x, n_feature, padding_idx=PAD)
         self.embedding_y = Embedding(n_class_y, n_feature, padding_idx=PAD)
-        self.positional_encoder = PositionalEncoder(n_feature=n_feature)
+        self.positional_encoder = PositionalEncoder(n_feature=n_feature,
+                                                    len_seq=max(LEN_SEQ_X, LEN_SEQ_Y))
         self.dropout = Dropout(p_dropout)
 
         self.encoders = nn.ModuleList([Encoder(n_feature=n_feature,
