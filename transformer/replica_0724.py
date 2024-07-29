@@ -1,13 +1,15 @@
+import math
+
 import torch
 import random
 
 from torch import nn
-from torch.nn import CrossEntropyLoss, Embedding, Dropout, Linear
+from torch.nn import CrossEntropyLoss, Embedding, Dropout, Linear, LayerNorm
 from torch.nn.functional import pad
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from demo import Attention, FeedForward
+from demo import FeedForward
 
 SOS = 1
 EOS = 2
@@ -19,33 +21,150 @@ N_CLASS_X = 10
 N_CLASS_Y = 11
 
 
-# N_CLASS_Y = 10
+class Attention(nn.Module):
+    def __init__(self, n_head=8, n_feature=512):
+        super().__init__()
+        self.dim_head = n_feature // n_head
+        self.n_head = n_head
+        self.n_feature = n_feature
+
+        self.fc_q = Linear(n_feature, n_feature)
+        self.fc_k = Linear(n_feature, n_feature)
+        self.fc_v = Linear(n_feature, n_feature)
+        self.fc_o = Linear(n_feature, n_feature)
+
+    def forward(self, q, k, v, mask):
+        """
+
+        Args:
+            q: (batch size, seq_len, n_features)
+            k: (batch size, seq_len, n_features)
+            v: (batch size, seq_len, n_features)
+            mask: src mask: (batch size, 1, 1, seq_len) or tgt mask: (batch size, 1, seq_len, seq_len)
+                src mask or tgt mask for self-attention
+                src mask also for cross-attention
+        Returns:
+            (batch size, seq_len, n_features)
+        """
+        # seq len for q and kv may be distinct
+        batch_size, seq_len_q, _ = q.shape
+        seq_len_kv = k.shape[1]
+        # Linear transfer
+        q = self.fc_q(q).view(batch_size, seq_len_q, self.n_head, self.dim_head).transpose(1, 2).contiguous()
+        k = self.fc_k(k).view(batch_size, seq_len_kv, self.n_head, self.dim_head).transpose(1, 2).contiguous()
+        v = self.fc_v(v).view(batch_size, seq_len_kv, self.n_head, self.dim_head).transpose(1, 2).contiguous()
+        # Query
+        # result in: (batch size, n_head, seq len q, seq len kv)
+        attention_score = torch.matmul(q, k.transpose(2, 3)) / math.sqrt(self.dim_head)
+        # Mask
+        attention_score = attention_score.masked_fill(mask == 0, -1e9)
+        # Softmax
+        attention_score = torch.softmax(attention_score, dim=-1)
+        # Weighted sum
+        out = torch.matmul(attention_score, v)
+        # Reshape to (batch size, seq len, n feature)
+        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len_q, self.n_feature)
+        # Final linear transfer
+        out = self.fc_o(out)
+        return out
+
 
 class PositionalEncoder(nn.Module):
     def __init__(self, n_feature=512, len_seq=20):
         super().__init__()
         self.pe = torch.zeros(len_seq, n_feature)
-        positions = torch.arange(0, len_seq).unsqueeze(1).float()   # （seq len, 1）
+        positions = torch.arange(0, len_seq).unsqueeze(1).float()  # （seq len, 1）
         div = 1 / 10000 ** (torch.arange(0, n_feature, 2).float() / n_feature)  # (n_feature/2,)
-        self.pe[:, 0::2] = torch.sin(positions * div)   # 2i
-        self.pe[:, 1::2] = torch.cos(positions * div)   # 2i+1
+        self.pe[:, 0::2] = torch.sin(positions * div)  # 2i
+        self.pe[:, 1::2] = torch.cos(positions * div)  # 2i+1
         self.pe = self.pe.unsqueeze(0)  # (1, seq len, n_feature)
+
     def forward(self, x):
+        """
+        Args:
+            x: (batch size, seq len, n_feature)
+
+        Returns:
+            (batch size, seq len, n_feature)
+        """
         return x + self.pe[:, :x.shape[1]]
 
-class Encoder(nn.Module):
-    def __init__(self):
-        super().__init__()
 
-    def forward(self):
-        pass
+class Encoder(nn.Module):
+    def __init__(self, n_feature=512,
+                 n_hidden_feature=2048,
+                 p_dropout=0.1,
+                 n_head=8):
+        super().__init__()
+        self.attention = Attention(n_head=n_head, n_feature=n_feature)
+        self.dropout = Dropout(p_dropout)
+        self.norm_0 = LayerNorm(n_feature)
+        self.feed_forward = FeedForward(n_feature=n_feature,
+                                        n_hidden_feature=n_hidden_feature)
+        self.norm_1 = LayerNorm(n_feature)
+
+    def forward(self, x, mask_x):
+        """
+
+        Args:
+            x: (batch size, seq len src, n_feature)
+            mask_x: (batch size, 1, 1, seq len src)
+
+        Returns:
+            (batch size, seq len src, n_feature)
+        """
+        out = self.attention(x, x, x, mask_x)
+        out = self.dropout(out)
+        out_0 = self.norm_0(x + out)
+
+        out = self.feed_forward(out_0)
+        out = self.dropout(out)
+        out = self.norm_1(out_0 + out)
+        return out
+
 
 class Decoder(nn.Module):
-    def __init__(self):
+    def __init__(self, n_feature=512,
+                 n_hidden_feature=2048,
+                 p_dropout=0.1,
+                 n_head=8):
         super().__init__()
+        self.self_attention = Attention(n_head=n_head, n_feature=n_feature)
+        self.dropout = Dropout(p_dropout)
+        self.norm_0 = LayerNorm(n_feature)
 
-    def forward(self):
-        pass
+        self.cross_attention = Attention(n_head=n_head, n_feature=n_feature)
+        self.norm_1 = LayerNorm(n_feature)
+
+        self.feed_forward = FeedForward(n_feature=n_feature,
+                                        n_hidden_feature=n_hidden_feature)
+        self.norm_2 = LayerNorm(n_feature)
+
+    def forward(self, y, mask_y, encoder_output, mask_x):
+        """
+
+        Args:
+            y: (batch size, seq len tgt - 1, n_feature)
+            mask_y: (batch size, 1, seq len tgt -1, seq len tgt - 1)
+            encoder_output: (batch size, seq len src, n_feature)
+            mask_x: (batch size, 1, 1, seq len src)
+
+        Returns:
+            (batch size, seq len tgt - 1, n_feature)
+        """
+        out = self.self_attention(y, y, y, mask_y)
+        out = self.dropout(out)
+        out_0 = self.norm_0(y + out)
+
+        out = self.cross_attention(out_0, encoder_output, encoder_output, mask_x)
+        out = self.dropout(out)
+        out_1 = self.norm_1(out_0 + out)
+
+        out = self.feed_forward(out_1)
+        out = self.dropout(out)
+        out_2 = self.norm_2(out_1 + out)
+        return out_2
+
 
 class Transformer(nn.Module):
     def __init__(self, n_feature=512, n_encoder=6, n_decoder=6,
@@ -98,6 +217,15 @@ class Transformer(nn.Module):
         return mask_pad * mask_markov
 
     def encode(self, x, mask_x):
+        """
+
+        Args:
+            x: (batch size, seq len src)
+            mask_x: (batch size, 1, 1, seq len src)
+
+        Returns:
+            (batch size, seq len src, n_feature)
+        """
         x = self.embedding_x(x)
         # (batch size, seq len src, n feature)
         x = self.positional_encoder(x)
@@ -107,6 +235,17 @@ class Transformer(nn.Module):
         return x
 
     def decode(self, y, mask_y, encoder_output, mask_x):
+        """
+
+        Args:
+            y: tgt[:, :-1], (batch size, seq len tgt - 1)
+            mask_y: (batch size, 1, seq len tgt -1, seq len tgt - 1)
+            encoder_output: (batch size, seq len src, n_feature)
+            mask_x: (batch size, 1, 1, seq len src)
+
+        Returns:
+            (batch size, seq len tgt - 1, n_feature)
+        """
         y = self.embedding_y(y)
         y = self.positional_encoder(y)
         y = self.dropout(y)
@@ -121,7 +260,7 @@ class Transformer(nn.Module):
             x: (batch size, seq len src)
             y: tgt[:, :-1], (batch size, seq len tgt - 1)
         Returns:
-
+            (batch size, seq len tgt - 1, n_class_y)
         """
         mask_x = self.get_mask_x(x)
         mask_y = self.get_mask_y(y)
