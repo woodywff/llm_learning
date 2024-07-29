@@ -4,12 +4,11 @@ import torch
 import random
 
 from torch import nn
-from torch.nn import CrossEntropyLoss, Embedding, Dropout, Linear, LayerNorm
+from torch.nn import CrossEntropyLoss, Embedding, Dropout, Linear, LayerNorm, ReLU
 from torch.nn.functional import pad
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from demo import FeedForward
 
 SOS = 1
 EOS = 2
@@ -67,6 +66,28 @@ class Attention(nn.Module):
         # Final linear transfer
         out = self.fc_o(out)
         return out
+
+
+class FeedForward(nn.Module):
+    def __init__(self, n_feature=512, n_hidden_feature=2048):
+        super().__init__()
+        self.fc_0 = Linear(n_feature, n_hidden_feature)
+        self.fc_1 = Linear(n_hidden_feature, n_feature)
+        self.relu = ReLU()
+
+    def forward(self, x):
+        """
+
+        Args:
+            x: (batch size, seq len, n feature)
+
+        Returns:
+            (batch size, seq len, n feature)
+        """
+        x = self.fc_0(x)
+        x = self.relu(x)
+        x = self.fc_1(x)
+        return x
 
 
 class PositionalEncoder(nn.Module):
