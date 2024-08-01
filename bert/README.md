@@ -5,6 +5,7 @@
 - `tokenizer.vocab['[SEP]']`: 2  # eos
 - `tokenizer.vocab['[MASK]']`: 3  
 # 
+## Dataset
 - the iter of dataset would take a couple of lines from the movie script
 - if the two lines are next to each other, the `is_next_label` is 1 otherwise the 2nd sentence may be randomly changed and the `is_next_label` is 0
 - for each token, we randomly pick up some places to change them to MASK or any other token,

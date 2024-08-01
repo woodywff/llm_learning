@@ -49,9 +49,9 @@ class Attention(nn.Module):
         batch_size, seq_len_q, _ = q.shape
         seq_len_kv = k.shape[1]
         # Linear transfer
-        q = self.fc_q(q).view(batch_size, seq_len_q, self.n_head, self.dim_head).transpose(1, 2).contiguous()
-        k = self.fc_k(k).view(batch_size, seq_len_kv, self.n_head, self.dim_head).transpose(1, 2).contiguous()
-        v = self.fc_v(v).view(batch_size, seq_len_kv, self.n_head, self.dim_head).transpose(1, 2).contiguous()
+        q = self.fc_q(q).view(batch_size, seq_len_q, self.n_head, self.dim_head).permute(0, 2, 1, 3)
+        k = self.fc_k(k).view(batch_size, seq_len_kv, self.n_head, self.dim_head).permute(0, 2, 1, 3)
+        v = self.fc_v(v).view(batch_size, seq_len_kv, self.n_head, self.dim_head).permute(0, 2, 1, 3)
         # Query
         # result in: (batch size, n_head, seq len q, seq len kv)
         attention_score = torch.matmul(q, k.transpose(2, 3)) / math.sqrt(self.dim_head)
@@ -288,11 +288,11 @@ class Transformer(nn.Module):
 
         encoder_output = self.encode(x, mask_x)
 
-        pred = self.decode(y, mask_y, encoder_output, mask_x)
+        out = self.decode(y, mask_y, encoder_output, mask_x)
 
-        pred = self.fc(pred)
+        out = self.fc(out)
 
-        return pred
+        return out
 
 
 class Server:
@@ -342,12 +342,33 @@ class Server:
             pbar.set_postfix(epoch=i_epoch, loss=loss, loss_val=loss_val)
 
     def infer(self):
-        pass
+        print('Target:')
+        print(self.tgt[0])
+        print('Prediction:')
+        # Encode
+        x = self.src[0].unsqueeze(0)  # (1, seq len x)
+        mask_x = self.model.get_mask_x(x)  # (1, 1, 1, seq len x)
+        encoder_output = self.model.encode(x, mask_x)
+        # Decode
+        y = torch.tensor([SOS]).unsqueeze(0)  # (1, 1)
+        for i in range(max(LEN_SEQ_X, LEN_SEQ_Y) + 2):
+            mask_y = self.model.get_mask_y(y)  # (1, 1, seq len y, seq len y)
+            out = self.model.decode(y, mask_y, encoder_output, mask_x)  # (1, seq len y, n feature)
+            out_last = self.model.fc(out[:, -1])  # (1, N_CLASS_Y)
+            next_y = torch.argmax(out_last, dim=-1)  # (1, )
+            out_all = self.model.fc(out)    # (1, seq len y, N_CLASS_Y)
+            all_y = torch.argmax(out_all, dim=-1)   # (1, seq len y)
+            print('current predicted:', all_y)
+            y = torch.cat([y, next_y.unsqueeze(0)], dim=-1)
+            print('augmented predicted:', y)
+            if next_y == EOS:
+                break
+
 
 
 def run():
     server = Server()
-    server.train()
+    server.train(n_epoch=100)
     server.infer()
 
 
