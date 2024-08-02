@@ -2,7 +2,7 @@ import math
 
 import torch
 import random
-
+import numpy as np
 from torch import nn
 from torch.nn import CrossEntropyLoss, Embedding, Dropout, Linear, LayerNorm, ReLU
 from torch.nn.functional import pad
@@ -91,14 +91,14 @@ class FeedForward(nn.Module):
 
 
 class PositionalEncoder(nn.Module):
-    def __init__(self, n_feature=512, len_seq=20):
+    def __init__(self, n_feature=512, len_seq=20, device='cuda'):
         super().__init__()
         self.pe = torch.zeros(len_seq, n_feature)
         positions = torch.arange(0, len_seq).unsqueeze(1).float()  # （seq len, 1）
         div = 1 / 10000 ** (torch.arange(0, n_feature, 2).float() / n_feature)  # (n_feature/2,)
         self.pe[:, 0::2] = torch.sin(positions * div)  # 2i
         self.pe[:, 1::2] = torch.cos(positions * div)  # 2i+1
-        self.pe = self.pe.unsqueeze(0)  # (1, seq len, n_feature)
+        self.pe = self.pe.unsqueeze(0).to(device)  # (1, seq len, n_feature)
 
     def forward(self, x):
         """
@@ -190,13 +190,14 @@ class Decoder(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, n_feature=512, n_encoder=6, n_decoder=6,
                  n_class_x=N_CLASS_X, n_class_y=N_CLASS_Y, n_hidden_feature=2048, n_head=8,
-                 p_dropout=0.1):
+                 p_dropout=0.1, device='cuda'):
         super().__init__()
 
         self.embedding_x = Embedding(n_class_x, n_feature, padding_idx=PAD)
         self.embedding_y = Embedding(n_class_y, n_feature, padding_idx=PAD)
         self.positional_encoder = PositionalEncoder(n_feature=n_feature,
-                                                    len_seq=max(LEN_SEQ_X, LEN_SEQ_Y))
+                                                    len_seq=max(LEN_SEQ_X, LEN_SEQ_Y),
+                                                    device=device)
         self.dropout = Dropout(p_dropout)
 
         self.encoders = nn.ModuleList([Encoder(n_feature=n_feature,
@@ -233,7 +234,7 @@ class Transformer(nn.Module):
         """
         mask_pad = (y != PAD).unsqueeze(1).unsqueeze(2).float()
         seq_len = y.shape[-1]
-        mask_markov = torch.tril(torch.ones(seq_len, seq_len))
+        mask_markov = torch.tril(torch.ones(seq_len, seq_len)).to(mask_pad.device)
         # (batch size, 1, 1, seq len) * (seq len, seq len) => (batch size, 1, seq len, seq len)
         return mask_pad * mask_markov
 
@@ -299,16 +300,17 @@ class Server:
     def __init__(self):
         super().__init__()
         self.bs = BATCH_SIZE
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.src, self.tgt = self.get_data()
 
-        self.model = Transformer(n_class_x=N_CLASS_X, n_class_y=N_CLASS_Y)
+        self.model = Transformer(n_class_x=N_CLASS_X, n_class_y=N_CLASS_Y, device=self.device).to(self.device)
         self.optim = Adam(self.model.parameters(), lr=0.0001)
         self.scheduler = ReduceLROnPlateau(self.optim, verbose=True, factor=0.5, patience=5)
-        self.loss_fn = CrossEntropyLoss(ignore_index=PAD)
+        self.loss_fn = CrossEntropyLoss(ignore_index=PAD).to(self.device)
 
     def get_data(self):
-        src = self._get_data(N_CLASS_X, LEN_SEQ_X)
-        tgt = self._get_data(N_CLASS_Y, LEN_SEQ_Y)
+        src = self._get_data(N_CLASS_X, LEN_SEQ_X).to(self.device)
+        tgt = self._get_data(N_CLASS_Y, LEN_SEQ_Y).to(self.device)
         return src, tgt
 
     def _get_data(self, n_class, len_seq):
@@ -342,6 +344,7 @@ class Server:
             pbar.set_postfix(epoch=i_epoch, loss=loss, loss_val=loss_val)
 
     def infer(self):
+        self.model.eval()
         print('Target:')
         print(self.tgt[0])
         print('Prediction:')
@@ -350,7 +353,7 @@ class Server:
         mask_x = self.model.get_mask_x(x)  # (1, 1, 1, seq len x)
         encoder_output = self.model.encode(x, mask_x)
         # Decode
-        y = torch.tensor([SOS]).unsqueeze(0)  # (1, 1)
+        y = torch.tensor([SOS]).unsqueeze(0).to(self.device)  # (1, 1)
         for i in range(max(LEN_SEQ_X, LEN_SEQ_Y) + 2):
             mask_y = self.model.get_mask_y(y)  # (1, 1, seq len y, seq len y)
             out = self.model.decode(y, mask_y, encoder_output, mask_x)  # (1, seq len y, n feature)
