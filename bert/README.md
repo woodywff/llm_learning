@@ -14,3 +14,16 @@ the corresponding label would be that: the changed place would label the origina
 - the two labels would be as [PAD l1 PAD l2 PAD]
 - the segment label would be as [1 1 ... 2 2 ...]
 - finally we would use PAD to pad lines, labels and segment label
+
+## What makes differences
+- It has been trained for two tasks:
+  - Masked Language Model
+  - Is Next Sentence
+- It has mask_x in shape of (batch size, 1, seq len, seq len) other than that of transformer encoder (batch size, 1, 1, seq len),
+    it means the mask works for both Q and K
+- BERT proved the possibility of pre-training for NLP with transformer architecture just like GPT which is based on decoders.
+
+## How to train a language translation model like transformer
+- Download a pre-trained BERT
+- Add decoder structures by the end of BERT (of course you need to make some change of the last layers)
+- Train it as a transformer
