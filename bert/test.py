@@ -1,24 +1,15 @@
-import torch
+import re
 
-# # Define tensors
-# a1 = torch.randn(2, 1, 1, 15)
-# b = torch.randn(15, 15)
-#
-# # Compute c for the first shape of a
-# c1 = a1 * b
-#
-# b2 = b.unsqueeze(0)
-# c2 = a1 * b2
-#
-# print(torch.allclose(c1, c2))  # Should print: True
-#
-# # Change the shape of a
-# a2 = a1.permute(0, 1, 3, 2)
-#
-# # Compute c for the second shape of a
-# c2 = a2 * b
-#
-# # Check if both results are the same
-# print(torch.allclose(c1, c2))  # Should print: True
+text = (
+       'Hello, how are you? I am Romeo.n'
+       'Hello, Romeo My name is Juliet. Nice to meet you.n'
+       'Nice meet you too. How are you today?n'
+       'Great. My baseball team won the competition.n'
+       'Oh Congratulations, Julietn'
+       'Thanks you Romeo'
+   )
 
-print(torch.tril(torch.ones(3,3)))
+sentences = re.sub("[.,!?-]", '', text.lower()).split('n')  # filter '.', ',', '?', '!'
+word_list = list(set(" ".join(sentences).split()))
+
+print(word_list)

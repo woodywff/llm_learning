@@ -1,5 +1,6 @@
 - code: https://medium.com/data-and-beyond/complete-guide-to-building-bert-model-from-sratch-3e6562228891
 - explanation: https://medium.com/@samia.khalid/bert-explained-a-complete-guide-with-theory-and-tutorial-3ac9ebc8fa7c
+- illustrated BERT: http://jalammar.github.io/illustrated-bert/
 - `tokenizer.vocab['[PAD]']`: 0
 - `tokenizer.vocab['[CLS]']`: 1  # sos
 - `tokenizer.vocab['[SEP]']`: 2  # eos
